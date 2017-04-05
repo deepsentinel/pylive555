@@ -253,7 +253,7 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     }
 
     env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
-    scs.subsession->miscPtr = rtspClient; // a hack to let subsession handle functions get the "RTSPClient" from the subsession 
+    scs.subsession->miscPtr = rtspClient; // a hack to let subsession handle functions get the "RTSPClient" from the subsession
     scs.subsession->sink->startPlaying(*(scs.subsession->readSource()),
 				       subsessionAfterPlaying, scs.subsession);
     // Also set a handler to be called if a RTCP "BYE" arrives for this subsession:
@@ -354,7 +354,7 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
   StreamClientState& scs = ((ourRTSPClient*)rtspClient)->scs; // alias
 
   // First, check whether any subsessions have still to be closed:
-  if (scs.session != NULL) { 
+  if (scs.session != NULL) {
     Boolean someSubsessionsWereActive = False;
     MediaSubsessionIterator iter(*scs.session);
     MediaSubsession* subsession;
@@ -506,7 +506,7 @@ void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes
 #endif
   envir() << "\n";
 #endif
-  
+
   // Then continue, to request the next frame of data:
   continuePlaying();
 }
@@ -549,7 +549,7 @@ startRTSP(PyObject *self, PyObject *args)
   // Next, send a RTSP "DESCRIBE" command, to get a SDP description for the stream.
   // Note that this command - like all RTSP commands - is sent asynchronously; we do not block, waiting for a response.
   // Instead, the following function call returns immediately, and we handle the RTSP response later, from within the event loop:
-  rtspClient->sendDescribeCommand(continueAfterDESCRIBE); 
+  rtspClient->sendDescribeCommand(continueAfterDESCRIBE);
 
   Py_INCREF(Py_None);
   return Py_None;
@@ -589,7 +589,7 @@ static PyMethodDef moduleMethods[] = {
 
 static struct PyModuleDef module = {
   PyModuleDef_HEAD_INIT,
-  "live555",   /* name of module */
+  "_live555",   /* name of module */
   NULL, /* module documentation, may be NULL */
   -1,       /* size of per-interpreter state of the module,
                or -1 if the module keeps state in global variables. */
@@ -597,7 +597,7 @@ static struct PyModuleDef module = {
 };
 
 PyMODINIT_FUNC
-PyInit_live555(void)
+PyInit__live555(void)
 {
   PyObject *m;
 
@@ -606,7 +606,7 @@ PyInit_live555(void)
     return NULL;
   }
 
-  error = PyErr_NewException("live555.error", NULL, NULL);
+  error = PyErr_NewException("_live555.error", NULL, NULL);
   Py_INCREF(error);
   PyModule_AddObject(m, "error", error);
 
