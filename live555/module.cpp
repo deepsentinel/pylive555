@@ -90,8 +90,8 @@ public:
                                   PyObject* frameCallback,
                                   PyObject* shutdownCallback,
                                   int clientHandle,
-				  int verbosityLevel = 0,
-				  portNumBits tunnelOverHTTPPortNum = 0);
+                                  int verbosityLevel = 0,
+                                  portNumBits tunnelOverHTTPPortNum = 0);
 
   ~ourRTSPClient();
 protected:
@@ -130,9 +130,9 @@ void usage(UsageEnvironment& env, char const* progName) {
 class DummySink: public MediaSink {
 public:
   static DummySink* createNew(UsageEnvironment& env,
-			      MediaSubsession& subsession, // identifies the kind of data that's being received
+                              MediaSubsession& subsession, // identifies the kind of data that's being received
                               PyObject *frameCallback,
-			      char const* streamId = NULL, // identifies the stream itself (optional)
+                              char const* streamId = NULL, // identifies the stream itself (optional)
                               RTSPClient *rtspClient = NULL);
 
 private:
@@ -142,10 +142,10 @@ private:
 
   static void afterGettingFrame(void* clientData, unsigned frameSize,
                                 unsigned numTruncatedBytes,
-				struct timeval presentationTime,
+                                struct timeval presentationTime,
                                 unsigned durationInMicroseconds);
   void afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-			 struct timeval presentationTime, unsigned durationInMicroseconds);
+                         struct timeval presentationTime, unsigned durationInMicroseconds);
 
 private:
   // redefined virtual functions:
@@ -221,7 +221,7 @@ void setupNextSubsession(RTSPClient* rtspClient) {
       setupNextSubsession(rtspClient); // give up on this subsession; go to the next one
     } else {
       env << *rtspClient << "Initiated the \"" << *scs.subsession
-	  << "\" subsession (client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum()+1 << ")\n";
+          << "\" subsession (client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum()+1 << ")\n";
 
       // Continue setting up this subsession, by sending a RTSP "SETUP" command:
       rtspClient->sendSetupCommand(*scs.subsession, continueAfterSETUP, False, scs.useTCP);
@@ -250,7 +250,7 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     }
 
     env << *rtspClient << "Set up the \"" << *scs.subsession
-	<< "\" subsession (client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum()+1 << ")\n";
+        << "\" subsession (client ports " << scs.subsession->clientPortNum() << "-" << scs.subsession->clientPortNum()+1 << ")\n";
 
     // Having successfully setup the subsession, create a data sink for it, and call "startPlaying()" on it.
     // (This will prepare the data sink to receive data; the actual flow of data from the client won't start happening until later,
@@ -260,14 +260,14 @@ void continueAfterSETUP(RTSPClient* rtspClient, int resultCode, char* resultStri
     // perhaps use your own custom "MediaSink" subclass instead
     if (scs.subsession->sink == NULL) {
       env << *rtspClient << "Failed to create a data sink for the \"" << *scs.subsession
-	  << "\" subsession: " << env.getResultMsg() << "\n";
+          << "\" subsession: " << env.getResultMsg() << "\n";
       break;
     }
 
     env << *rtspClient << "Created a data sink for the \"" << *scs.subsession << "\" subsession\n";
     scs.subsession->miscPtr = rtspClient; // a hack to let subsession handle functions get the "RTSPClient" from the subsession
     scs.subsession->sink->startPlaying(*(scs.subsession->readSource()),
-				       subsessionAfterPlaying, scs.subsession);
+                                       subsessionAfterPlaying, scs.subsession);
     // Also set a handler to be called if a RTCP "BYE" arrives for this subsession:
     if (scs.subsession->rtcpInstance() != NULL) {
       scs.subsession->rtcpInstance()->setByeHandler(subsessionByeHandler, scs.subsession);
@@ -378,15 +378,15 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 
     while ((subsession = iter.next()) != NULL) {
       if (subsession->sink != NULL) {
-	Medium::close(subsession->sink);
-	subsession->sink = NULL;
+        Medium::close(subsession->sink);
+        subsession->sink = NULL;
 
-	if (subsession->rtcpInstance() != NULL) {
+        if (subsession->rtcpInstance() != NULL) {
           // nocommit
-	  //subsession->rtcpInstance()->setByeHandler(NULL, NULL); // in case the server sends a RTCP "BYE" while handling "TEARDOWN"
-	}
+          //subsession->rtcpInstance()->setByeHandler(NULL, NULL); // in case the server sends a RTCP "BYE" while handling "TEARDOWN"
+        }
 
-	someSubsessionsWereActive = True;
+        someSubsessionsWereActive = True;
       }
     }
 
@@ -423,15 +423,30 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 
 // Implementation of "ourRTSPClient":
 
-ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env, char const* rtspURL, PyObject* frameCallback, PyObject* shutdownCallback,
-                    int clientHandle,
-					int verbosityLevel, portNumBits tunnelOverHTTPPortNum) {
-  ourRTSPClient* result = new ourRTSPClient(env, rtspURL, frameCallback, shutdownCallback, verbosityLevel, tunnelOverHTTPPortNum, clientHandle);
+ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env,
+                                        char const* rtspURL,
+                                        PyObject* frameCallback,
+                                        PyObject* shutdownCallback,
+                                        int clientHandle,
+                                        int verbosityLevel,
+                                        portNumBits tunnelOverHTTPPortNum) {
+  ourRTSPClient* result = new ourRTSPClient(env,
+                                            rtspURL,
+                                            frameCallback,
+                                            shutdownCallback,
+                                            verbosityLevel,
+                                            tunnelOverHTTPPortNum,
+                                            clientHandle);
   return result;
 }
 
-ourRTSPClient::ourRTSPClient(UsageEnvironment& env, char const* rtspURL, PyObject* frameCallback, PyObject* shutdownCallback,
-			     int verbosityLevel, portNumBits tunnelOverHTTPPortNum, int clientHandle)
+ourRTSPClient::ourRTSPClient(UsageEnvironment& env,
+                             char const* rtspURL,
+                             PyObject* frameCallback,
+                             PyObject* shutdownCallback,
+                             int verbosityLevel,
+                             portNumBits tunnelOverHTTPPortNum,
+                             int clientHandle)
   : RTSPClient(env, rtspURL, verbosityLevel, "", tunnelOverHTTPPortNum, -1) {
   Py_INCREF(frameCallback);
   Py_INCREF(shutdownCallback);
@@ -488,14 +503,19 @@ DummySink::~DummySink() {
   Py_DECREF(frameCallback);
 }
 
-void DummySink::afterGettingFrame(void* clientData, unsigned frameSize, unsigned numTruncatedBytes,
-				  struct timeval presentationTime, unsigned durationInMicroseconds) {
+void DummySink::afterGettingFrame(void* clientData,
+                                  unsigned frameSize,
+                                  unsigned numTruncatedBytes,
+                                  struct timeval presentationTime,
+                                  unsigned durationInMicroseconds) {
   DummySink* sink = (DummySink*)clientData;
   sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
 }
 
-void DummySink::afterGettingFrame(unsigned frameSize, unsigned numTruncatedBytes,
-				  struct timeval presentationTime, unsigned durationInUS) {
+void DummySink::afterGettingFrame(unsigned frameSize,
+                                  unsigned numTruncatedBytes,
+                                  struct timeval presentationTime,
+                                  unsigned durationInUS) {
   PyEval_RestoreThread(threadState);
   if (first == 1) {
     // NOTE: only necessary for H264 I think?
