@@ -261,7 +261,6 @@ DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, PyObjec
 DummySink::~DummySink() {
   delete[] fReceiveBuffer;
   delete[] fStreamId;
-  Py_DECREF(frameCallback);
 }
 
 void DummySink::afterGettingFrame(void* clientData,
