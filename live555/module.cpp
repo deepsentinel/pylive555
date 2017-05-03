@@ -93,12 +93,15 @@ public:
 				  int verbosityLevel = 0,
 				  portNumBits tunnelOverHTTPPortNum = 0);
 
+  ~ourRTSPClient();
 protected:
-  ourRTSPClient(UsageEnvironment& env, char const* rtspURL, PyObject* frameCallback, PyObject* shutdownCallback,
-		int verbosityLevel, portNumBits tunnelOverHTTPPortNum, int clientHandle);
-  // called only by createNew();
-  virtual ~ourRTSPClient();
-
+  ourRTSPClient(UsageEnvironment& env,
+                char const* rtspURL,
+                PyObject* frameCallback,
+                PyObject* shutdownCallback,
+                int verbosityLevel,
+                portNumBits tunnelOverHTTPPortNum,
+                int clientHandle);
 public:
   StreamClientState scs;
 };
@@ -401,6 +404,7 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
   Medium::close(rtspClient);
   // Note that this will also cause this stream's "StreamClientState" structure to get reclaimed.
   clientList[handle] = NULL;
+  delete static_cast<ourRTSPClient*>(rtspClient);
   /* This callback will work at some point in the future. Currently, though this callback triggers: https://bugs.python.org/issue23571
      Which generates a SystemError on stopEventLoop. This kills the interpreter, which is a wholly bad outcome.
      THEREFORE, I am leaving the code here, despite its lack of goodness for now.
@@ -430,14 +434,16 @@ ourRTSPClient::ourRTSPClient(UsageEnvironment& env, char const* rtspURL, PyObjec
 			     int verbosityLevel, portNumBits tunnelOverHTTPPortNum, int clientHandle)
   : RTSPClient(env, rtspURL, verbosityLevel, "", tunnelOverHTTPPortNum, -1) {
   Py_INCREF(frameCallback);
+  Py_INCREF(shutdownCallback);
   scs.frameCallback = frameCallback;
   scs.shutdownCallback = shutdownCallback;
   scs.m_handle = clientHandle;
 }
 
 ourRTSPClient::~ourRTSPClient() {
+  Py_DECREF(this->scs.shutdownCallback);
+  Py_DECREF(this->scs.frameCallback);
 }
-
 
 // Implementation of "StreamClientState":
 
