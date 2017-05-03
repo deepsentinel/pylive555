@@ -581,7 +581,7 @@ Boolean DummySink::continuePlaying() {
   return True;
 }
 
-static PyObject *
+PyObject *
 startRTSP(PyObject *self, PyObject *args)
 {
   const char *rtspURL;
@@ -652,7 +652,7 @@ startRTSP(PyObject *self, PyObject *args)
   return Py_BuildValue("i", clientHandle);
 }
 
-static PyObject *
+PyObject *
 stopRTSP(PyObject *self, PyObject *args)
 {
   int rtspClientHandle = 1;
@@ -696,7 +696,7 @@ stopRTSP(PyObject *self, PyObject *args)
 
 static char stopEventLoopFlag = 0;
 
-static PyObject *
+PyObject *
 runEventLoop(PyObject *self, PyObject *args)
 {
   stopEventLoopFlag = 0;
@@ -710,7 +710,7 @@ runEventLoop(PyObject *self, PyObject *args)
   return Py_None;
 }
 
-static PyObject *
+PyObject *
 stopEventLoop(PyObject *self, PyObject *args)
 {
   stopEventLoopFlag = 1;
