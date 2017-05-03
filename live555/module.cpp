@@ -75,7 +75,7 @@ public:
   int m_handle;
 };
 
-static RTSPClient* clientList[MAX_CLIENTS];
+static RTSPClient* clientList[MAX_CLIENTS] = {NULL};
 int last_handle = -1;
 
 // If you're streaming just a single stream (i.e., just from a single URL, once), then you can define and use just a single
