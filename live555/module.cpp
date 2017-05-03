@@ -24,9 +24,11 @@ along with this library; if not, write to the Free Software Foundation, Inc.,
 #include "liveMedia.hh"
 #include "BasicUsageEnvironment.hh"
 
-#define MAX_CLIENTS 1000
-
-// Forward function definitions:
+/*
+ *
+ * Forward function definitions
+ *
+ */
 
 // RTSP 'response handlers':
 void continueAfterDESCRIBE(RTSPClient* rtspClient, int resultCode, char* resultString);
@@ -45,17 +47,39 @@ void setupNextSubsession(RTSPClient* rtspClient);
 // Used to shut down and close a stream (including its "RTSPClient" object):
 void shutdownStream(RTSPClient* rtspClient, int exitCode = 1);
 
-#define RTSP_CLIENT_VERBOSITY_LEVEL 0 // by default, print verbose output from each "RTSPClient"
 
-// If you don't want to see debugging output for each received frame, then comment out the following line:
+/*
+ *
+ * some GLOBAL vars
+ *
+ */
+
+#define MAX_CLIENTS 1000
+
+// by default, print verbose output from each "RTSPClient"
+#define RTSP_CLIENT_VERBOSITY_LEVEL 0
+
+// If you don't want to see debugging output for each received frame,
+// then comment out the following line:
 //#define DEBUG_PRINT_EACH_RECEIVED_FRAME 1
 
 static PyObject *error;
+static PyThreadState *threadState;
 
 static TaskScheduler* scheduler;
 static UsageEnvironment* env;
 
-static PyThreadState *threadState;
+static RTSPClient* clientList[MAX_CLIENTS] = {NULL};
+int last_handle = -1;
+
+static char stopEventLoopFlag = 0;
+
+
+/*
+ *
+ * class implementation
+ *
+ */
 
 // Define a class to hold per-stream state that we maintain throughout each stream's lifetime:
 class StreamClientState {
@@ -74,9 +98,6 @@ public:
   double duration;
   int m_handle;
 };
-
-static RTSPClient* clientList[MAX_CLIENTS] = {NULL};
-int last_handle = -1;
 
 // If you're streaming just a single stream (i.e., just from a single URL, once), then you can define and use just a single
 // "StreamClientState" structure, as a global variable in your application.  However, because - in this demo application - we're
@@ -160,6 +181,172 @@ private:
   int first;
 };
 
+// Implementation of "ourRTSPClient":
+
+ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env,
+                                        char const* rtspURL,
+                                        PyObject* frameCallback,
+                                        PyObject* shutdownCallback,
+                                        int clientHandle,
+                                        int verbosityLevel,
+                                        portNumBits tunnelOverHTTPPortNum) {
+  ourRTSPClient* result = new ourRTSPClient(env,
+                                            rtspURL,
+                                            frameCallback,
+                                            shutdownCallback,
+                                            verbosityLevel,
+                                            tunnelOverHTTPPortNum,
+                                            clientHandle);
+  return result;
+}
+
+ourRTSPClient::ourRTSPClient(UsageEnvironment& env,
+                             char const* rtspURL,
+                             PyObject* frameCallback,
+                             PyObject* shutdownCallback,
+                             int verbosityLevel,
+                             portNumBits tunnelOverHTTPPortNum,
+                             int clientHandle)
+  : RTSPClient(env, rtspURL, verbosityLevel, "", tunnelOverHTTPPortNum, -1) {
+  Py_INCREF(frameCallback);
+  Py_INCREF(shutdownCallback);
+  scs.frameCallback = frameCallback;
+  scs.shutdownCallback = shutdownCallback;
+  scs.m_handle = clientHandle;
+}
+
+ourRTSPClient::~ourRTSPClient() {
+  Py_DECREF(this->scs.shutdownCallback);
+  Py_DECREF(this->scs.frameCallback);
+}
+
+// Implementation of "StreamClientState":
+
+StreamClientState::StreamClientState()
+  : iter(NULL), session(NULL), subsession(NULL), streamTimerTask(NULL), duration(0.0) {
+}
+
+StreamClientState::~StreamClientState() {
+  delete iter;
+  if (session != NULL) {
+    // We also need to delete "session", and unschedule "streamTimerTask" (if set)
+    UsageEnvironment& env = session->envir(); // alias
+
+    env.taskScheduler().unscheduleDelayedTask(streamTimerTask);
+    Medium::close(session);
+  }
+}
+
+
+// Implementation of "DummySink":
+
+// Define the size of the buffer that we'll use:
+#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 1024*1024
+
+DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, PyObject *frameCallback, char const* streamId, RTSPClient *rtspClient) {
+  return new DummySink(env, subsession, frameCallback, streamId, rtspClient);
+}
+
+DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, PyObject *frameCallbackIn, char const* streamId, RTSPClient *rtspClient)
+  : MediaSink(env),
+    fSubsession(subsession) {
+  fStreamId = strDup(streamId);
+  fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
+  frameCallback = frameCallbackIn;
+  fRTSPClient = rtspClient;
+  first = 1;
+}
+
+DummySink::~DummySink() {
+  delete[] fReceiveBuffer;
+  delete[] fStreamId;
+  Py_DECREF(frameCallback);
+}
+
+void DummySink::afterGettingFrame(void* clientData,
+                                  unsigned frameSize,
+                                  unsigned numTruncatedBytes,
+                                  struct timeval presentationTime,
+                                  unsigned durationInMicroseconds) {
+  DummySink* sink = (DummySink*)clientData;
+  sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
+}
+
+void DummySink::afterGettingFrame(unsigned frameSize,
+                                  unsigned numTruncatedBytes,
+                                  struct timeval presentationTime,
+                                  unsigned durationInUS) {
+  PyEval_RestoreThread(threadState);
+  if (first == 1) {
+    // NOTE: only necessary for H264 I think?
+    unsigned numSPropRecords;
+    SPropRecord* sPropRecords = parseSPropParameterSets(fSubsession.fmtp_spropparametersets(), numSPropRecords);
+    for(unsigned i=0;i<numSPropRecords;i++) {
+      PyObject *result = PyEval_CallFunction(frameCallback, "sy#iii", fSubsession.codecName(), sPropRecords[i].sPropBytes, sPropRecords[i].sPropLength, -1, -1, -1);
+      if (result == NULL) {
+        fprintf(stderr, "Exception in RTSP callback:\n");
+        PyErr_PrintEx(1);
+        fSource->stopGettingFrames();
+        env->taskScheduler().scheduleDelayedTask(0, (TaskFunc*)shutdownStream, fRTSPClient);
+        PyEval_SaveThread();
+        return;
+        //break;
+      }
+    }
+    delete[] sPropRecords;
+    first = 0;
+  }
+
+  // TODO: can we somehow avoid ... making a full copy here:
+  //printf("%d bytes\n", frameSize);fflush(stdout);
+  PyObject *result = PyEval_CallFunction(frameCallback, "sy#llI", fSubsession.codecName(), fReceiveBuffer, frameSize, presentationTime.tv_sec, presentationTime.tv_usec, durationInUS);
+  if (result == NULL) {
+    fprintf(stderr, "Exception in RTSP callback:");
+    PyErr_PrintEx(1);
+    fSource->stopGettingFrames();
+    env->taskScheduler().scheduleDelayedTask(0, (TaskFunc*)shutdownStream, fRTSPClient);
+    PyEval_SaveThread();
+    return;
+  }
+  PyEval_SaveThread();
+
+  // We've just received a frame of data.  (Optionally) print out information about it:
+#ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
+  if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
+  envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
+  if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
+  char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
+  sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
+  envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
+  if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
+    envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
+  }
+#ifdef DEBUG_PRINT_NPT
+  envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
+#endif
+  envir() << "\n";
+#endif
+
+  // Then continue, to request the next frame of data:
+  continuePlaying();
+}
+
+Boolean DummySink::continuePlaying() {
+  if (fSource == NULL) return False; // sanity check (should not happen)
+
+  // Request the next frame of data from our input source.  "afterGettingFrame()" will get called later, when it arrives:
+  fSource->getNextFrame(fReceiveBuffer, DUMMY_SINK_RECEIVE_BUFFER_SIZE,
+                        afterGettingFrame, this,
+                        onSourceClosure, this);
+  return True;
+}
+
+
+/*
+ *
+ * utils functions
+ *
+ */
 
 // Implementation of the RTSP 'response handlers':
 
@@ -421,165 +608,11 @@ void shutdownStream(RTSPClient* rtspClient, int exitCode) {
 }
 
 
-// Implementation of "ourRTSPClient":
-
-ourRTSPClient* ourRTSPClient::createNew(UsageEnvironment& env,
-                                        char const* rtspURL,
-                                        PyObject* frameCallback,
-                                        PyObject* shutdownCallback,
-                                        int clientHandle,
-                                        int verbosityLevel,
-                                        portNumBits tunnelOverHTTPPortNum) {
-  ourRTSPClient* result = new ourRTSPClient(env,
-                                            rtspURL,
-                                            frameCallback,
-                                            shutdownCallback,
-                                            verbosityLevel,
-                                            tunnelOverHTTPPortNum,
-                                            clientHandle);
-  return result;
-}
-
-ourRTSPClient::ourRTSPClient(UsageEnvironment& env,
-                             char const* rtspURL,
-                             PyObject* frameCallback,
-                             PyObject* shutdownCallback,
-                             int verbosityLevel,
-                             portNumBits tunnelOverHTTPPortNum,
-                             int clientHandle)
-  : RTSPClient(env, rtspURL, verbosityLevel, "", tunnelOverHTTPPortNum, -1) {
-  Py_INCREF(frameCallback);
-  Py_INCREF(shutdownCallback);
-  scs.frameCallback = frameCallback;
-  scs.shutdownCallback = shutdownCallback;
-  scs.m_handle = clientHandle;
-}
-
-ourRTSPClient::~ourRTSPClient() {
-  Py_DECREF(this->scs.shutdownCallback);
-  Py_DECREF(this->scs.frameCallback);
-}
-
-// Implementation of "StreamClientState":
-
-StreamClientState::StreamClientState()
-  : iter(NULL), session(NULL), subsession(NULL), streamTimerTask(NULL), duration(0.0) {
-}
-
-StreamClientState::~StreamClientState() {
-  delete iter;
-  if (session != NULL) {
-    // We also need to delete "session", and unschedule "streamTimerTask" (if set)
-    UsageEnvironment& env = session->envir(); // alias
-
-    env.taskScheduler().unscheduleDelayedTask(streamTimerTask);
-    Medium::close(session);
-  }
-}
-
-
-// Implementation of "DummySink":
-
-// Define the size of the buffer that we'll use:
-#define DUMMY_SINK_RECEIVE_BUFFER_SIZE 1024*1024
-
-DummySink* DummySink::createNew(UsageEnvironment& env, MediaSubsession& subsession, PyObject *frameCallback, char const* streamId, RTSPClient *rtspClient) {
-  return new DummySink(env, subsession, frameCallback, streamId, rtspClient);
-}
-
-DummySink::DummySink(UsageEnvironment& env, MediaSubsession& subsession, PyObject *frameCallbackIn, char const* streamId, RTSPClient *rtspClient)
-  : MediaSink(env),
-    fSubsession(subsession) {
-  fStreamId = strDup(streamId);
-  fReceiveBuffer = new u_int8_t[DUMMY_SINK_RECEIVE_BUFFER_SIZE];
-  frameCallback = frameCallbackIn;
-  fRTSPClient = rtspClient;
-  first = 1;
-}
-
-DummySink::~DummySink() {
-  delete[] fReceiveBuffer;
-  delete[] fStreamId;
-  Py_DECREF(frameCallback);
-}
-
-void DummySink::afterGettingFrame(void* clientData,
-                                  unsigned frameSize,
-                                  unsigned numTruncatedBytes,
-                                  struct timeval presentationTime,
-                                  unsigned durationInMicroseconds) {
-  DummySink* sink = (DummySink*)clientData;
-  sink->afterGettingFrame(frameSize, numTruncatedBytes, presentationTime, durationInMicroseconds);
-}
-
-void DummySink::afterGettingFrame(unsigned frameSize,
-                                  unsigned numTruncatedBytes,
-                                  struct timeval presentationTime,
-                                  unsigned durationInUS) {
-  PyEval_RestoreThread(threadState);
-  if (first == 1) {
-    // NOTE: only necessary for H264 I think?
-    unsigned numSPropRecords;
-    SPropRecord* sPropRecords = parseSPropParameterSets(fSubsession.fmtp_spropparametersets(), numSPropRecords);
-    for(unsigned i=0;i<numSPropRecords;i++) {
-      PyObject *result = PyEval_CallFunction(frameCallback, "sy#iii", fSubsession.codecName(), sPropRecords[i].sPropBytes, sPropRecords[i].sPropLength, -1, -1, -1);
-      if (result == NULL) {
-        fprintf(stderr, "Exception in RTSP callback:\n");
-        PyErr_PrintEx(1);
-        fSource->stopGettingFrames();
-        env->taskScheduler().scheduleDelayedTask(0, (TaskFunc*)shutdownStream, fRTSPClient);
-        PyEval_SaveThread();
-        return;
-        //break;
-      }
-    }
-    delete[] sPropRecords;
-    first = 0;
-  }
-
-  // TODO: can we somehow avoid ... making a full copy here:
-  //printf("%d bytes\n", frameSize);fflush(stdout);
-  PyObject *result = PyEval_CallFunction(frameCallback, "sy#llI", fSubsession.codecName(), fReceiveBuffer, frameSize, presentationTime.tv_sec, presentationTime.tv_usec, durationInUS);
-  if (result == NULL) {
-    fprintf(stderr, "Exception in RTSP callback:");
-    PyErr_PrintEx(1);
-    fSource->stopGettingFrames();
-    env->taskScheduler().scheduleDelayedTask(0, (TaskFunc*)shutdownStream, fRTSPClient);
-    PyEval_SaveThread();
-    return;
-  }
-  PyEval_SaveThread();
-
-  // We've just received a frame of data.  (Optionally) print out information about it:
-#ifdef DEBUG_PRINT_EACH_RECEIVED_FRAME
-  if (fStreamId != NULL) envir() << "Stream \"" << fStreamId << "\"; ";
-  envir() << fSubsession.mediumName() << "/" << fSubsession.codecName() << ":\tReceived " << frameSize << " bytes";
-  if (numTruncatedBytes > 0) envir() << " (with " << numTruncatedBytes << " bytes truncated)";
-  char uSecsStr[6+1]; // used to output the 'microseconds' part of the presentation time
-  sprintf(uSecsStr, "%06u", (unsigned)presentationTime.tv_usec);
-  envir() << ".\tPresentation time: " << (int)presentationTime.tv_sec << "." << uSecsStr;
-  if (fSubsession.rtpSource() != NULL && !fSubsession.rtpSource()->hasBeenSynchronizedUsingRTCP()) {
-    envir() << "!"; // mark the debugging output to indicate that this presentation time is not RTCP-synchronized
-  }
-#ifdef DEBUG_PRINT_NPT
-  envir() << "\tNPT: " << fSubsession.getNormalPlayTime(presentationTime);
-#endif
-  envir() << "\n";
-#endif
-
-  // Then continue, to request the next frame of data:
-  continuePlaying();
-}
-
-Boolean DummySink::continuePlaying() {
-  if (fSource == NULL) return False; // sanity check (should not happen)
-
-  // Request the next frame of data from our input source.  "afterGettingFrame()" will get called later, when it arrives:
-  fSource->getNextFrame(fReceiveBuffer, DUMMY_SINK_RECEIVE_BUFFER_SIZE,
-                        afterGettingFrame, this,
-                        onSourceClosure, this);
-  return True;
-}
+/*
+ *
+ * Python methods
+ *
+ */
 
 PyObject *
 startRTSP(PyObject *self, PyObject *args)
@@ -694,8 +727,6 @@ stopRTSP(PyObject *self, PyObject *args)
   return Py_None;
 }
 
-static char stopEventLoopFlag = 0;
-
 PyObject *
 runEventLoop(PyObject *self, PyObject *args)
 {
@@ -719,6 +750,13 @@ stopEventLoop(PyObject *self, PyObject *args)
   return Py_None;
 }
 
+
+/*
+ *
+ * below is Python Module Definition
+ *
+ */
+
 static PyMethodDef moduleMethods[] = {
   {"startRTSP",  startRTSP, METH_VARARGS, "Start loading frames from the provided RTSP url.  First argument is the URL string (should be rtsp://username:password@host/...; second argument is a callback function called once per received frame; third agument is the callback function to be called if/when the stream is shut down; fourth is False if UDP transport should be used and True if TCP transport should be used."},
   {"stopRTSP",  stopRTSP, METH_VARARGS, "Stop loading frames from the provided RTSP url.  First argument is the int of the RTSP handler. This is the same int that was returned by startRTSP"},
@@ -730,9 +768,9 @@ static PyMethodDef moduleMethods[] = {
 static struct PyModuleDef module = {
   PyModuleDef_HEAD_INIT,
   "_live555",   /* name of module */
-  NULL, /* module documentation, may be NULL */
-  -1,       /* size of per-interpreter state of the module,
-               or -1 if the module keeps state in global variables. */
+  NULL,         /* module documentation, may be NULL */
+  -1,           /* size of per-interpreter state of the module,
+                   or -1 if the module keeps state in global variables. */
   moduleMethods
 };
 
